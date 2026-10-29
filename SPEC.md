@@ -1,5 +1,7 @@
 # SPEC – „Zwei Antworten“ (Arbeitstitel)
 
+> **Kostenlos & Open Source** (AGPL-3.0). Keine Preise, keine Zahlungen, keine Premium-Inhalte. Betrieb ausschließlich selbst gehostet per **Docker Compose**.
+
 Gesprächs- und Fragespiele für Paare und Freunde, bei denen **beide gleichzeitig auf dem eigenen Gerät antworten** und die Antworten erst aufgedeckt werden, wenn beide fertig sind. Dazu ein **Deck-Editor**, mit dem man eigene Fragen-Decks baut („nur das Tool, ohne fertige Fragen“).
 
 > **Für Claude Code:** Lies diese Datei komplett, bevor du Code schreibst. Arbeite die Meilensteine (Abschnitt 13) der Reihe nach ab. Nach jedem Meilenstein: Tests grün, `pint` sauber, kurze Zusammenfassung, dann stoppen und auf Freigabe warten. Bei Unklarheiten in dieser Spec: nachfragen statt raten.
@@ -13,7 +15,8 @@ Gesprächs- und Fragespiele für Paare und Freunde, bei denen **beide gleichzeit
 **Ausdrücklich NICHT:**
 - Keine Kopie von Texten, Fragen, Bildern, Namen, Logos oder Design einer bestehenden Seite (z. B. boredinary.com). Alle Inhalte, das Branding und das Design sind eigenständig.
 - Keine nativen Apps, kein Chat, kein Social Feed.
-- Keine Nutzerkonten-Pflicht zum Spielen.
+- Keine Nutzerkonten-Pflicht zum Spielen (außer der Host verlangt für einen Raum/ein Deck eine Anmeldung, siehe 4.5).
+- Keine Preise, Käufe, Abos oder Bezahl-Decks. Alle Inhalte sind frei.
 
 ## 2. Tech-Stack (Stand Oktober 2026)
 
@@ -24,13 +27,15 @@ Gesprächs- und Fragespiele für Paare und Freunde, bei denen **beide gleichzeit
 | Frontend | **Livewire 4** + **Blade** + **Alpine.js** | kein separates JS-SPA |
 | CSS | **Tailwind CSS 4** via Vite | |
 | Echtzeit | **Laravel Reverb** mit **Database-Driver** | kein Redis nötig |
-| DB | SQLite (Dev) / MySQL 8 oder PostgreSQL 16+ (Prod) | |
+| DB | **PostgreSQL 17** (Docker Compose) / SQLite (Tests, lokale Entwicklung) | |
 | Queue | `database` | |
-| Zahlungen | **Stripe Checkout** (Einmalkauf) über **Laravel Cashier (Stripe)** | Webhooks |
+| Auth | **Laravel Fortify** (lokales Login, abschaltbar) + **OIDC** (generischer Provider, z. B. Authentik, Keycloak, Authelia, Zitadel) | siehe Abschnitt 7 |
 | Admin | **Filament** (aktuelle, zu Laravel 13 kompatible Version) | nur für Admins |
 | Tests | **Pest** (aktuelle Version) | Feature + Unit + Browser-Tests optional |
 | Qualität | **Laravel Pint**, **Larastan** (Level 8) | |
-| Lokal | **Laravel Herd** oder **Sail** | |
+| Hosting | **Docker Compose**: Nginx, PHP-FPM 8.5, Queue-Worker, Scheduler, PostgreSQL (später Reverb) | einziger unterstützter Betriebsweg |
+| Lokal | Docker Compose oder Laravel Herd | |
+| Lizenz | **AGPL-3.0-or-later** | |
 
 Regeln:
 - `declare(strict_types=1);` in allen PHP-Dateien.
@@ -41,17 +46,17 @@ Regeln:
 ## 3. Rollen
 
 - **Gast:** spielt ohne Konto, über Raum-Link oder Code.
-- **Nutzer (optional, mit Konto):** speichert eigene Decks, kauft Premium-Decks, sieht Spielverlauf.
-- **Admin:** pflegt offizielle Decks, Preise, sieht Bestellungen.
+- **Nutzer (optional, mit Konto):** speichert eigene Decks, sieht Spielverlauf, kann Räume mit Login-Pflicht betreten.
+- **Admin:** pflegt offizielle Decks.
 
-Auth: Laravel-Starter-Kit (Livewire-Variante) mit E-Mail + Passwort und **Magic Link**. E-Mail-Verifizierung Pflicht für Käufe.
+Auth: Laravel-Starter-Kit (Livewire-Variante) mit E-Mail + Passwort, **OIDC** (Abschnitt 7) und optional **Magic Link**. Lokales Login und OIDC sind per `.env` einzeln an-/abschaltbar.
 
 ## 4. Kernkonzept: Raum & gleichzeitiges Antworten
 
 ### 4.1 Ablauf
-1. **Host** wählt ein Deck (offiziell, gekauft oder eigenes) und einen **Modus** (siehe 4.2) → „Raum erstellen“.
+1. **Host** wählt ein Deck (offiziell oder eigenes) und einen **Modus** (siehe 4.2) → „Raum erstellen“.
 2. System erzeugt Raum mit **6-stelligem Code** (ohne verwechselbare Zeichen: kein 0/O/1/I) und Link `/r/{code}`. QR-Code anzeigen.
-3. **Gast** öffnet Link, gibt Anzeigenamen ein (max. 24 Zeichen) → beide sehen sich in der Lobby (Echtzeit).
+3. **Gast** öffnet Link, gibt Anzeigenamen ein (max. 24 Zeichen) → beide sehen sich in der Lobby (Echtzeit). Verlangt der Raum eine Anmeldung (4.5), muss sich der Gast vorher anmelden (OIDC oder lokal); der Anzeigename wird dann aus dem Konto vorbelegt.
 4. Host startet. Beide sehen **dieselbe Frage gleichzeitig**.
 5. Jeder antwortet auf dem eigenen Gerät. Der andere sieht nur **„✓ hat geantwortet“**, nie den Inhalt.
 6. Sind beide fertig → **Aufdecken**: Antworten nebeneinander, inkl. Übereinstimmung (bei Auswahlfragen).
@@ -74,6 +79,12 @@ v1: genau **2**. Datenmodell aber für **2–8** auslegen (Gruppenmodus später)
 - Räume verfallen nach **24 h Inaktivität**; Antworten von Gastspielen werden dann gelöscht (Scheduler-Job).
 - Antworten bis zum Aufdecken niemals an den anderen Client senden (auch nicht im Livewire-Payload!).
 
+### 4.5 Zugang pro Deck/Raum („Login-Pflicht“)
+- Jedes Deck hat ein Feld `play_access`: `guests` (Standard – jeder mit Link/Code darf mitspielen, ohne Konto) oder `members` (alle Teilnehmenden müssen angemeldet sein).
+- Beim Raum-Erstellen übernimmt der Raum den Wert des Decks. Der Host darf ihn **verschärfen** (`guests` → `members`), aber nicht lockern, wenn das Deck `members` verlangt. Ein „Schnelles Deck“ ohne Konto ist immer `guests`; `members` setzt voraus, dass der Host selbst angemeldet ist.
+- Ist im Raum `members` gesetzt, leitet `/r/{code}` nicht angemeldete Besucher zur Anmeldung (bei reinem OIDC-Betrieb direkt zum OIDC-Provider) und danach zurück in den Raum.
+- Die Prüfung erfolgt serverseitig beim Beitreten **und** bei jeder Aktion im Raum (Policy), nicht nur in der Oberfläche.
+
 ## 5. Fragetypen
 
 | Typ | Eingabe | Aufdecken |
@@ -91,12 +102,12 @@ Jede Frage hat optional: `hint` (kleiner Untertitel), `follow_up` (Anschlussfrag
 ## 6. Decks
 
 ### 6.1 Deck-Eigenschaften
-`title`, `slug`, `description`, `audience` (`couples` | `friends` | `solo` | `any`), `category` (`deep_talk` | `fun` | `intimacy` | `future` | `custom`), `language` (v1: `de`, `en`), `is_adult` (18+), `price_cents` (0 = kostenlos), `sale_price_cents` (nullable), `cover_image`, `status` (`draft` | `published` | `archived`), `owner_id` (null = offiziell), `visibility` (`private` | `unlisted` | `public`).
+`title`, `slug`, `description`, `audience` (`couples` | `friends` | `solo` | `any`), `category` (`deep_talk` | `fun` | `intimacy` | `future` | `custom`), `language` (v1: `de`, `en`), `is_adult` (18+), `cover_image`, `status` (`draft` | `published` | `archived`), `owner_id` (null = offiziell), `visibility` (`private` | `unlisted` | `public`), `play_access` (`guests` | `members`, siehe 4.5).
 
 ### 6.2 Deck-Editor („nur das Tool“)
 - Eingeloggte Nutzer erstellen beliebig viele **eigene Decks**: Fragen anlegen, Typ wählen, per Drag & Drop sortieren (Livewire 4 Sortable / Alpine).
 - **Import/Export als JSON** (Schema siehe 6.3) und **Import aus CSV** (Spalten: `type,text,options,hint`).
-- Eigene Decks kostenlos spielbar, auch für Gäste über den Raum-Link.
+- Eigene Decks spielbar, auch für Gäste über den Raum-Link (sofern `play_access` = `guests`).
 - `unlisted`: per Link teilbar. `public`: v1 deaktiviert (später mit Moderation).
 - Ohne Konto: „Schnelles Deck“ – Fragen direkt beim Raum-Erstellen eintippen, wird nicht gespeichert.
 
@@ -122,31 +133,35 @@ Validierung über eine eigene `DeckSchema`-Klasse; Fehler mit Zeilen-/Index-Anga
 
 ### 6.4 Start-Inhalte
 Claude Code erstellt **4 eigene Beispiel-Decks** mit je 15–25 selbst formulierten Fragen (keine Übernahme fremder Fragen) als JSON in `database/decks/`:
-1. „Wie geht's uns eigentlich?“ – Paare, Deep Talk, kostenlos
-2. „Errate mich“ – Paare/Freunde, Fun, kostenlos
-3. „Was als Nächstes?“ – Paare, Zukunft & Pläne, kostenpflichtig
-4. „Näher“ – Paare, Intimität (respektvoll, nicht explizit), 18+, kostenpflichtig
+1. „Wie geht's uns eigentlich?“ – Paare, Deep Talk
+2. „Errate mich“ – Paare/Freunde, Fun
+3. „Was als Nächstes?“ – Paare, Zukunft & Pläne
+4. „Näher“ – Paare, Intimität (respektvoll, nicht explizit), 18+
 
-## 7. Zahlungen
+Alle Decks sind frei verfügbar.
 
-- Einmalkauf pro Deck über **Stripe Checkout** (kein Abo in v1). Preise und Rabattpreis kommen aus der DB, nicht aus dem Frontend.
-- Kauf erfordert Konto + verifizierte E-Mail. Freischaltung **nur über Webhook** (`checkout.session.completed`), idempotent (Event-ID speichern).
-- Bei gekauften Decks reicht es, wenn **der Host** das Deck besitzt; der Gast spielt mit.
-- Rückerstattung: Admin löst in Filament aus → Stripe-Refund + Entzug des Zugangs.
-- Rechnungen: Stripe-Rechnung/Beleg per Mail. Preise inkl. MwSt. anzeigen; Stripe Tax aktivierbar per Config.
+## 7. Anmeldung per OIDC
+
+- Generische **OpenID-Connect**-Anbindung (Authorization Code Flow mit **PKCE**, `state` und `nonce`), Konfiguration ausschließlich über `.env`:
+  `OIDC_ENABLED`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_SCOPES` (Standard `openid profile email`), `OIDC_BUTTON_LABEL`.
+- Provider-Endpunkte kommen per Discovery (`{issuer}/.well-known/openid-configuration`, gecacht). Das ID-Token wird vollständig geprüft: Signatur über JWKS, `iss`, `aud`, `exp`/`iat`, `nonce`.
+- Konten werden über `(oidc_issuer, oidc_subject)` verknüpft, nicht über die E-Mail. Neues OIDC-Konto → Nutzer wird angelegt; E-Mail gilt als verifiziert, wenn der Provider `email_verified=true` liefert. Existiert bereits ein lokales Konto mit derselben E-Mail, wird **nicht** automatisch verknüpft (Schutz vor Kontoübernahme), sondern ein Hinweis angezeigt.
+- `AUTH_LOCAL_ENABLED=false` schaltet E-Mail/Passwort-Login und Registrierung ab → OIDC ist dann der einzige Login. `OIDC_AUTO_REDIRECT=true` leitet `/login` direkt zum Provider.
+- Access-/Refresh-Tokens werden **nicht** gespeichert (nur Login, keine API-Zugriffe beim Provider).
+- Logout meldet in der App ab; RP-initiated Logout beim Provider optional über `end_session_endpoint` (`OIDC_LOGOUT_AT_PROVIDER`).
 
 ## 8. Seiten / Routen
 
 | Route | Inhalt |
 |---|---|
 | `/` | Hero, Deck-Übersicht (Karten), „Eigenes Deck bauen“-CTA |
-| `/decks/{slug}` | Deck-Detail, Beispielfragen (3), Preis, „Spielen“/„Kaufen“ |
+| `/decks/{slug}` | Deck-Detail, Beispielfragen (3), „Spielen“ |
 | `/play/{slug}` | Modus wählen → Raum erstellen |
 | `/r/{code}` | Lobby → Spiel → Aufdecken → Ergebnis (eine Livewire-Komponente mit Zuständen) |
 | `/join` | Code eingeben |
 | `/my/decks` | eigene Decks (Liste, Editor) |
 | `/my/decks/{id}/edit` | Deck-Editor |
-| `/my/purchases` | gekaufte Decks |
+| `/auth/oidc/redirect`, `/auth/oidc/callback` | OIDC-Login |
 | `/about`, `/contact` | statisch |
 | `/impressum`, `/datenschutz`, `/agb`, `/widerruf` | Rechtliches (Platzhalter-Texte, klar als Vorlage markiert) |
 | `/admin` | Filament |
@@ -154,19 +169,20 @@ Claude Code erstellt **4 eigene Beispiel-Decks** mit je 15–25 selbst formulier
 ## 9. Datenmodell (Kurzfassung)
 
 ```
-users            id, name, email, email_verified_at, password, locale, birthdate_confirmed_adult (bool), timestamps
+users            id, name, email, email_verified_at, password?, oidc_issuer?, oidc_subject?, locale,
+                 birthdate_confirmed_adult (bool), is_admin (bool), timestamps
+                 unique (oidc_issuer, oidc_subject)
 decks            id, owner_id?, title, slug, description, audience, category, language, is_adult,
-                 price_cents, sale_price_cents?, cover_path?, status, visibility, timestamps, soft deletes
+                 cover_path?, status, visibility, play_access, timestamps, soft deletes
 questions        id, deck_id, position, type, text, hint?, follow_up?, config (json: options/min/max/labels), skippable
-purchases        id, user_id, deck_id, stripe_checkout_id, stripe_event_id (unique), amount_cents, currency,
-                 status (paid|refunded), timestamps
-rooms            id, code (unique), deck_id?, host_participant_id?, mode, status (lobby|playing|revealing|finished),
-                 current_question_index, quick_questions (json, für "schnelles Deck"), last_activity_at, timestamps
+rooms            id, code (unique), deck_id?, host_participant_id?, mode, play_access,
+                 status (lobby|playing|revealing|finished), current_question_index,
+                 quick_questions (json, für "schnelles Deck"), last_activity_at, timestamps
 participants     id, room_id, user_id?, display_name, token_hash, is_host, last_seen_at, timestamps
 answers          id, room_id, participant_id, question_ref, round (für "Errate mich"), value (json),
                  skipped (bool), answered_at
 ```
-- Enums als PHP-Backed-Enums (`DeckCategory`, `QuestionType`, `RoomMode`, `RoomStatus` …).
+- Enums als PHP-Backed-Enums (`DeckCategory`, `QuestionType`, `RoomMode`, `RoomStatus`, `PlayAccess` …).
 - Antworten verschlüsselt speichern (`encrypted:array` Cast).
 - Raum-Logik in einer Klasse `RoomStateMachine` (Übergänge explizit, ungültige Übergänge werfen Exception), nicht im Livewire-Component.
 
@@ -190,30 +206,32 @@ Channel-Autorisierung über `participant_token`, nicht über Login.
 - Gastspiele: Daten nach 24 h Inaktivität löschen. Nutzer können Konto + alle Daten selbst löschen.
 - Rate Limiting: Raum-Erstellung (10/h pro IP), Join-Versuche (20/min pro IP, gegen Code-Raten), Antworten.
 - CSRF, CSP-Header, `SameSite=Lax`, HTTPS erzwingen.
-- Policies: nur Owner bearbeitet eigene Decks; nur Käufer/Host startet Premium-Decks; Antworten nur nach Aufdecken sichtbar.
+- Policies: nur Owner bearbeitet eigene Decks; Räume mit `play_access = members` nur für angemeldete Teilnehmende; Antworten nur nach Aufdecken sichtbar.
+- OIDC: PKCE, `state`, `nonce`, vollständige ID-Token-Prüfung; keine Speicherung von Provider-Tokens; keine automatische Kontoverknüpfung über E-Mail.
 - Rechtstexte als Platzhalter mit deutlichem Hinweis „vor Livegang durch Fachperson prüfen lassen“.
 
 ## 13. Meilensteine
 
-1. **Setup:** Laravel 13 + PHP 8.5, Livewire 4, Tailwind 4, Pest, Pint, Larastan, CI (GitHub Actions: Tests, Pint, Larastan). README mit Start-Anleitung.
+1. **Setup:** Laravel 13 + PHP 8.5, Livewire 4, Tailwind 4, Pest, Pint, Larastan, CI (GitHub Actions: Tests, Pint, Larastan). README mit Start-Anleitung. **Docker Compose** (Nginx, PHP-FPM, Queue, Scheduler, PostgreSQL) und **OIDC-Login**.
 2. **Domain:** Migrationen, Models, Enums, `DeckSchema`, Seeder mit den 4 JSON-Decks, Unit-Tests.
 3. **Spiel ohne Echtzeit:** Raum erstellen/beitreten, Modus „Gleichzeitig ehrlich“, Polling, Aufdecken, Ergebnis. Feature-Tests inkl. „Antwort leakt nicht vor Aufdecken“.
 4. **Echtzeit:** Reverb (DB-Driver), Presence Channel, Events, Reconnect, Polling-Fallback.
 5. **Weitere Modi:** Errate mich, Gesprächskarten, Ein-Geräte-Modus, Solo.
-6. **Konten & Deck-Editor:** Auth, eigene Decks, Drag & Drop, JSON/CSV-Import/Export, Schnelles Deck.
-7. **Zahlungen:** Stripe Checkout, Webhook, Freischaltung, Refund in Filament.
+6. **Konten & Deck-Editor:** Magic Link (optional), eigene Decks, Drag & Drop, JSON/CSV-Import/Export, Schnelles Deck, Login-Pflicht pro Deck/Raum im Editor einstellbar.
+7. **Admin:** Filament für offizielle Decks und Nutzer (Admin-Rolle per `is_admin`, Ernennung per Artisan-Befehl).
 8. **Feinschliff:** Design, Dark Mode, i18n EN, Barrierefreiheit, Rechtsseiten, Cleanup-Job, Rate Limits, CSP.
-9. **Deployment:** `.env.example`, Anleitung für Laravel Forge / Ploi / Docker (Nginx + PHP-FPM 8.5 + Supervisor für Queue & Reverb), Backup-Hinweis.
+9. **Betrieb:** Produktionshärtung des Compose-Setups (Reverb-Dienst, TLS hinter Reverse Proxy, Update-Anleitung), Backup/Restore für PostgreSQL und Uploads, vorgebaute Images per GitHub Actions (GHCR).
 
 ## 14. Akzeptanzkriterien (Auswahl)
 
 - Zwei Handys im selben WLAN und über Mobilfunk können einen Raum betreten und ein 20-Fragen-Deck ohne Neuladen durchspielen.
 - Kein Client erhält zu irgendeinem Zeitpunkt die Antwort des anderen vor dem Aufdecken (Test prüft Livewire-Payload und Broadcast-Payload).
 - Seite neu laden mitten im Spiel → man landet bei derselben Frage, eigene Antwort bleibt erhalten.
-- Kauf mit Stripe-Testkarte schaltet das Deck erst nach Webhook frei; doppelter Webhook erzeugt keinen zweiten Kauf.
+- `docker compose up -d` auf einem frischen Server startet eine lauffähige Instanz (inkl. Migrationen).
+- Login über einen OIDC-Provider (z. B. Keycloak) funktioniert; ein Raum mit `play_access = members` lässt nicht angemeldete Gäste nicht hinein.
 - Lighthouse mobil: Performance ≥ 90, Accessibility ≥ 95.
 - `composer test`, `vendor/bin/pint --test`, `vendor/bin/phpstan` laufen grün in CI.
 
 ## 15. Später (nicht in v1)
 
-Gruppenmodus (3–8), öffentliche Community-Decks mit Moderation, Tagesfrage per Push/Mail, PWA/Offline, Abo-Modell, KI-gestützte Fragenvorschläge im Editor (Laravel AI SDK).
+Gruppenmodus (3–8), öffentliche Community-Decks mit Moderation, Tagesfrage per Push/Mail, PWA/Offline, mehrere OIDC-Provider gleichzeitig, KI-gestützte Fragenvorschläge im Editor (Laravel AI SDK).

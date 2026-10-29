@@ -1,0 +1,63 @@
+# Rendered by the nginx image's envsubst step (only ${PHP_FPM_HOST} is set).
+
+upstream php_fpm {
+    server ${PHP_FPM_HOST};
+}
+
+server {
+    listen 8080 default_server;
+    server_name _;
+
+    root /var/www/html/public;
+    index index.php;
+    charset utf-8;
+
+    client_max_body_size 20m;
+    server_tokens off;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+
+    gzip on;
+    gzip_vary on;
+    gzip_types text/css application/javascript application/json image/svg+xml text/plain;
+
+    # Fingerprinted Vite assets and fonts never change.
+    location /build/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        access_log off;
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location = /robots.txt  { access_log off; log_not_found off; }
+
+    error_page 404 /index.php;
+
+    location = /index.php {
+        fastcgi_pass php_fpm;
+        fastcgi_param SCRIPT_FILENAME /var/www/html/public/index.php;
+        include fastcgi_params;
+        fastcgi_param HTTP_PROXY "";
+        fastcgi_hide_header X-Powered-By;
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+        fastcgi_read_timeout 60s;
+    }
+
+    # No other PHP file is ever executed.
+    location ~ \.php$ {
+        return 404;
+    }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}

@@ -116,4 +116,16 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Local Login
+    |--------------------------------------------------------------------------
+    |
+    | Email/password login, registration and password resets. Disable this to
+    | make OpenID Connect (see config/oidc.php) the only way to sign in.
+    |
+    */
+
+    'local_enabled' => (bool) env('AUTH_LOCAL_ENABLED', true),
+
 ];

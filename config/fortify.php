@@ -145,8 +145,10 @@ return [
     */
 
     'features' => [
-        Features::registration(),
-        Features::resetPasswords(),
+        ...((bool) env('AUTH_LOCAL_ENABLED', true) ? [
+            Features::registration(),
+            Features::resetPasswords(),
+        ] : []),
         Features::emailVerification(),
     ],
 

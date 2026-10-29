@@ -4,9 +4,6 @@ use App\Concerns\PasswordValidationRules;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\ValidationException;
-use Laravel\Fortify\Actions\DisableTwoFactorAuthentication;
-use Laravel\Fortify\Features;
-use Laravel\Fortify\Fortify;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -18,20 +15,13 @@ new #[Title('Security settings')] class extends Component {
     public string $password_confirmation = '';
 
 
-
-    /**
-     * Mount the component.
-     */
-    public function mount(DisableTwoFactorAuthentication $disableTwoFactorAuthentication): void
-    {
-
-    }
-
     /**
      * Update the password for the currently authenticated user.
      */
     public function updatePassword(): void
     {
+        abort_unless(Auth::user()->hasPassword(), 403);
+
         try {
             $validated = $this->validate([
                 'current_password' => $this->currentPasswordRules(),
@@ -51,8 +41,6 @@ new #[Title('Security settings')] class extends Component {
 
         Flux::toast(variant: 'success', text: __('Password updated.'));
     }
-
-
 }; ?>
 
 <section class="w-full">
@@ -61,6 +49,11 @@ new #[Title('Security settings')] class extends Component {
     <flux:heading level="2" class="sr-only">{{ __('Security settings') }}</flux:heading>
 
     <x-pages::settings.layout :heading="__('Update password')" :subheading="__('Ensure your account is using a long, random password to stay secure')">
+        @unless (auth()->user()->hasPassword())
+            <flux:callout icon="key" class="mt-6" data-test="passwordless-notice"
+                :heading="__('You sign in through your login provider.')"
+                :text="__('Your account has no password. Manage your sign-in security with your login provider.')" />
+        @else
         <form method="POST" wire:submit="updatePassword" class="mt-6 space-y-6">
             <flux:input
                 wire:model="current_password"
@@ -95,8 +88,7 @@ new #[Title('Security settings')] class extends Component {
                 </flux:button>
             </div>
         </form>
-
-
+        @endunless
     </x-pages::settings.layout>
 
 </section>

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Auth\Oidc\OidcSettings;
 use Carbon\CarbonImmutable;
+use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
@@ -17,7 +19,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(
+            OidcSettings::class,
+            fn (): OidcSettings => OidcSettings::fromConfig((array) config('oidc')),
+        );
     }
 
     /**
@@ -34,6 +39,14 @@ class AppServiceProvider extends ServiceProvider
     protected function configureDefaults(): void
     {
         Date::use(CarbonImmutable::class);
+
+        // Behind a reverse proxy (Docker setup) the proxy's forwarded headers
+        // decide the scheme and host used for generated URLs.
+        $trustedProxies = config('app.trusted_proxies');
+
+        if (is_string($trustedProxies) && $trustedProxies !== '') {
+            TrustProxies::at($trustedProxies === '*' ? '*' : array_map(trim(...), explode(',', $trustedProxies)));
+        }
 
         DB::prohibitDestructiveCommands(
             app()->isProduction(),

@@ -3,6 +3,7 @@
 use App\Concerns\PasswordValidationRules;
 use App\Livewire\Actions\Logout;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
 use Livewire\Component;
 
 new class extends Component {
@@ -10,14 +11,19 @@ new class extends Component {
 
     public string $password = '';
 
+    public string $email = '';
+
     /**
      * Delete the currently authenticated user.
      */
     public function deleteUser(Logout $logout): void
     {
-        $this->validate([
-            'password' => $this->currentPasswordRules(),
-        ]);
+        // Accounts without a password (OIDC) confirm by typing their email address.
+        $this->validate(Auth::user()->hasPassword()
+            ? ['password' => $this->currentPasswordRules()]
+            : ['email' => ['required', 'string', Rule::in([Auth::user()->email])]],
+            ['email.in' => __('The email address does not match your account.')],
+        );
 
         tap(Auth::user(), $logout(...))->delete();
 
@@ -35,7 +41,11 @@ new class extends Component {
             </flux:subheading>
         </div>
 
-        <flux:input wire:model="password" :label="__('Password')" type="password" viewable />
+        @if (auth()->user()->hasPassword())
+            <flux:input wire:model="password" :label="__('Password')" type="password" viewable />
+        @else
+            <flux:input wire:model="email" :label="__('Type your email address to confirm')" type="email" :placeholder="auth()->user()->email" />
+        @endif
 
         <div class="flex justify-end space-x-2 rtl:space-x-reverse">
             <flux:modal.close>

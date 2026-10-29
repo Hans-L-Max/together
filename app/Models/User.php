@@ -19,7 +19,9 @@ use Illuminate\Support\Str;
  * @property string $name
  * @property string $email
  * @property Carbon|null $email_verified_at
- * @property string $password
+ * @property string|null $password
+ * @property string|null $oidc_issuer
+ * @property string|null $oidc_subject
  * @property string|null $remember_token
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -42,6 +44,20 @@ class User extends Authenticatable implements MustVerifyEmail
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    /**
+     * Whether the user can sign in (and confirm actions) with a local password.
+     * Accounts created through OpenID Connect start without one.
+     */
+    public function hasPassword(): bool
+    {
+        return $this->password !== null && $this->password !== '';
+    }
+
+    public function usesOidc(): bool
+    {
+        return $this->oidc_subject !== null;
     }
 
     /**
